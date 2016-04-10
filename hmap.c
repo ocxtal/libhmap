@@ -24,11 +24,6 @@
 #define MIN2(x, y)					( (x) > (y) ? (y) : (x) )
 
 
-/* type aliasing */
-typedef kvec_t(uint8_t) kvec_uint8_t;
-
-
-
 /**
  * MurmurHash3 string hashing function,
  * extracted from https://github.com/aappleby/smhasher
@@ -174,8 +169,8 @@ struct hmap_pair_s {
 struct hmap_intl_s {
 	uint32_t mask;
 	uint32_t object_size;
-	kvec_uint8_t key_arr;
-	kvec_uint8_t object_arr;
+	kvec_t(uint8_t) key_arr;
+	kvec_t(uint8_t) object_arr;
 	uint32_t next_id;
 	uint32_t reserved;
 	struct hmap_pair_s *table;
