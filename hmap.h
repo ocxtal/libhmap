@@ -79,6 +79,12 @@ void *hmap_get_object(
 	hmap_t *hmap,
 	uint32_t id);
 
+/**
+ * @fn hmap_get_count
+ */
+uint32_t hmap_get_count(
+	hmap_t *hmap);
+
 #endif /* _HMAP_H_INCLUDED */
 /**
  * end of hmap.h

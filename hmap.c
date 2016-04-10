@@ -401,6 +401,16 @@ void *hmap_get_object(
 	return((void *)hmap_object_get_ptr((struct hmap_intl_s *)hmap, id));
 }
 
+/**
+ * @fn hmap_get_count
+ */
+uint32_t hmap_get_count(
+	hmap_t *_hmap)
+{
+	struct hmap_intl_s *hmap = (struct hmap_intl_s *)_hmap;
+	return(hmap->next_id);
+}
+
 
 /* unittests */
 unittest_config(
@@ -446,6 +456,7 @@ unittest()
 		
 		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
 	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
 	/* get key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
@@ -455,6 +466,7 @@ unittest()
 		assert(a.len == b.len, "a(%d), b(%d)", a.len, b.len);
 		assert(strcmp(a.str, b.str) == 0, "a(%s), b(%s)", a.str, b.str);
 	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
 	/* get key in reverse order */
 	for(int64_t i = UNITTEST_KEY_COUNT - 1; i >= 0; i--) {
@@ -464,6 +476,7 @@ unittest()
 		assert(a.len == b.len, "a(%d), b(%d)", a.len, b.len);
 		assert(strcmp(a.str, b.str) == 0, "a(%s), b(%s)", a.str, b.str);
 	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
 	hmap_clean(hmap);
 }
