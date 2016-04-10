@@ -63,7 +63,8 @@ void hmap_clean(
  */
 uint32_t hmap_get_id(
 	hmap_t *hmap,
-	struct hmap_key_s key);
+	char const *str,
+	int32_t len);
 
 /**
  * @fn hmap_get_key

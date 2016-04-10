@@ -8,7 +8,7 @@ Libhmap is a string -> object hashmap with intermediate unique ID.
 struct object {
 	hmap_header_t header;
 	
-	/* user-defined member follow header */
+	/* user-defined member follows header */
 	int member1;
 	int member2;
 	/* ... */
@@ -18,10 +18,7 @@ struct object {
 hmap_t *h = hmap_init(128, sizeof(struct object));
 
 /* reserve area for key0 */
-uint32_t id = hmap_get_id(h, (struct hmap_key_s){
-	.str = "key0",
-	.len = strlen("key0")
-});
+uint32_t id = hmap_get_id(h, "key0", strlen("key0"));
 
 /* get pointer to the reserved area for the object */
 struct object *obj = hmap_get_object(h, id);
