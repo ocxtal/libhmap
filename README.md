@@ -8,6 +8,10 @@ Libhmap is a string -> object hashmap with intermediate unique ID.
 struct object {
 	hmap_header_t header;
 	
+	/* user-defined member follow header */
+	int member1;
+	int member2;
+	/* ... */
 };
 
 /* create hashmap with initial size 128 */
