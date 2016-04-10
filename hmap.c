@@ -154,6 +154,8 @@ struct hmap_header_intl_s {
 	uint32_t key_len;
 	uint64_t key_base;
 };
+_static_assert(sizeof(struct hmap_header_intl_s) == sizeof(struct hmap_header_s));
+_static_assert_offset(struct hmap_header_intl_s, obj_id, struct hmap_header_s, id, 0);
 
 /**
  * @struct hmap_pair_s
@@ -162,6 +164,7 @@ struct hmap_pair_s {
 	uint32_t id;
 	uint32_t hash_val;
 };
+_static_assert(sizeof(struct hmap_pair_s) == 8);
 
 /**
  * @struct hmap_intl_s
