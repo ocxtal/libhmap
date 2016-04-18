@@ -215,8 +215,8 @@ hmap_t *hmap_init(
 	return((hmap_t *)hmap);
 
 _hmap_init_error_handler:;
-	if(hmap != NULL) { free(hmap); }
-	if(table != NULL) { free(table); }
+	free(hmap); hmap = NULL;
+	free(table); table = NULL;
 	return(NULL);
 }
 
@@ -229,16 +229,10 @@ void hmap_clean(
 	struct hmap_intl_s *hmap = (struct hmap_intl_s *)_hmap;
 
 	if(hmap != NULL) {
-		if(kv_ptr(hmap->key_arr) != NULL) {
-			kv_destroy(hmap->key_arr);
-		}
-		if(kv_ptr(hmap->object_arr) != NULL) {
-			kv_destroy(hmap->object_arr);
-		}
-		if(hmap->table != NULL) {
-			free(hmap->table);
-		}
-		free(hmap);
+		kv_destroy(hmap->key_arr);
+		kv_destroy(hmap->object_arr);
+		free(hmap->table); hmap->table = NULL;
+		free(hmap); hmap = NULL;
 	}
 	return;
 }
