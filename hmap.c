@@ -153,12 +153,10 @@ uint32_t hash_uint32(uint32_t val)
  * @struct hmap_header_intl_s
  */
 struct hmap_header_intl_s {
-	uint32_t obj_id;
-	uint32_t key_len;
-	uint64_t key_base;
+	uint64_t key_base 	: 48;
+	uint64_t key_len	: 16;
 };
 _static_assert(sizeof(struct hmap_header_intl_s) == sizeof(struct hmap_header_s));
-_static_assert_offset(struct hmap_header_intl_s, obj_id, struct hmap_header_s, id, 0);
 
 /**
  * @struct hmap_pair_s
@@ -170,9 +168,9 @@ struct hmap_pair_s {
 _static_assert(sizeof(struct hmap_pair_s) == 8);
 
 /**
- * @struct hmap_intl_s
+ * @struct hmap_s
  */
-struct hmap_intl_s {
+struct hmap_s {
 	uint32_t mask;
 	uint32_t object_size;
 	kvec_t(uint8_t) key_arr;
@@ -181,7 +179,6 @@ struct hmap_intl_s {
 	uint32_t reserved;
 	struct hmap_pair_s *table;
 };
-_static_assert_offset(struct hmap_intl_s, object_arr.a, struct hmap_s, object, 0);
 
 /**
  * @fn hmap_init
@@ -196,7 +193,7 @@ hmap_t *hmap_init(
 	}
 
 	/* malloc mem */
-	struct hmap_intl_s *hmap = malloc(sizeof(struct hmap_intl_s));
+	struct hmap_s *hmap = malloc(sizeof(struct hmap_s));
 	struct hmap_pair_s *table = malloc(sizeof(struct hmap_pair_s) * hmap_size);
 	if(hmap == NULL || table == NULL) {
 		goto _hmap_init_error_handler;
@@ -226,7 +223,7 @@ _hmap_init_error_handler:;
 void hmap_clean(
 	hmap_t *_hmap)
 {
-	struct hmap_intl_s *hmap = (struct hmap_intl_s *)_hmap;
+	struct hmap_s *hmap = (struct hmap_s *)_hmap;
 
 	if(hmap != NULL) {
 		kv_destroy(hmap->key_arr);
@@ -242,7 +239,7 @@ void hmap_clean(
  */
 static _force_inline
 struct hmap_header_intl_s *hmap_object_get_ptr(
-	struct hmap_intl_s *hmap,
+	struct hmap_s *hmap,
 	uint32_t id)
 {
 	return((struct hmap_header_intl_s *)(kv_ptr(hmap->object_arr) + (uint64_t)id * hmap->object_size));
@@ -253,7 +250,7 @@ struct hmap_header_intl_s *hmap_object_get_ptr(
  */
 static _force_inline
 struct hmap_key_s hmap_object_get_key(
-	struct hmap_intl_s *hmap,
+	struct hmap_s *hmap,
 	uint32_t id)
 {
 	struct hmap_header_intl_s *obj = hmap_object_get_ptr(hmap, id);
@@ -270,7 +267,7 @@ struct hmap_key_s hmap_get_key(
 	hmap_t *_hmap,
 	uint32_t id)
 {
-	return(hmap_object_get_key((struct hmap_intl_s *)_hmap, id));
+	return(hmap_object_get_key((struct hmap_s *)_hmap, id));
 }
 
 /**
@@ -278,7 +275,7 @@ struct hmap_key_s hmap_get_key(
  */
 static _force_inline
 void hmap_expand(
-	struct hmap_intl_s *hmap)
+	struct hmap_s *hmap)
 {
 	uint32_t prev_mask = hmap->mask;
 	uint32_t prev_size = prev_mask + 1;
@@ -330,7 +327,7 @@ uint32_t hmap_get_id(
 	char const *str,
 	int32_t len)
 {
-	struct hmap_intl_s *hmap = (struct hmap_intl_s *)_hmap;
+	struct hmap_s *hmap = (struct hmap_s *)_hmap;
 
 	uint32_t const invalid_id = (uint32_t)-1;
 	uint32_t id = invalid_id;
@@ -377,7 +374,6 @@ uint32_t hmap_get_id(
 		struct hmap_header_intl_s *h = (struct hmap_header_intl_s *)tmp;
 
 		/* push key string to key_arr */
-		h->obj_id = id;
 		h->key_len = len;
 		h->key_base = kv_size(hmap->key_arr);
 		kv_pushm(hmap->key_arr, str, len);
@@ -396,7 +392,7 @@ void *hmap_get_object(
 	hmap_t *hmap,
 	uint32_t id)
 {
-	return((void *)hmap_object_get_ptr((struct hmap_intl_s *)hmap, id));
+	return((void *)hmap_object_get_ptr((struct hmap_s *)hmap, id));
 }
 
 /**
@@ -405,7 +401,7 @@ void *hmap_get_object(
 uint32_t hmap_get_count(
 	hmap_t *_hmap)
 {
-	struct hmap_intl_s *hmap = (struct hmap_intl_s *)_hmap;
+	struct hmap_s *hmap = (struct hmap_s *)_hmap;
 	return(hmap->next_id);
 }
 

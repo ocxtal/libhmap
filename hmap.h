@@ -14,24 +14,13 @@
  * @brief object must have a hmap_header_t field at the head.
  */
 struct hmap_header_s {
-	uint32_t id;
-	uint32_t reserved1;
-	uint64_t reserved2;
+	uint64_t reserved;
 };
 typedef struct hmap_header_s hmap_header_t;
 
 /**
- * @struct hmap_s
+ * @type hmap_t
  */
-struct hmap_s {
-	uint32_t reserved1[2];
-	uint64_t reserved2[2];
-	void *reserved3;
-	uint64_t reserved4[2];
-	void *object;
-	uint32_t reserved5[2];
-	void *reserved6;
-};
 typedef struct hmap_s hmap_t;
 
 /**
