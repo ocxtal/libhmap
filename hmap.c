@@ -4,6 +4,12 @@
  *
  * @brief string to object hashmap
  */
+
+#define UNITTEST_UNIQUE_ID			55
+#define UNITTEST 					1
+
+#include "unittest.h"
+
 #include <string.h>
 #include <stdint.h>
 #include "hmap.h"
@@ -11,10 +17,6 @@
 #include "log.h"
 #include "sassert.h"
 
-#define UNITTEST_UNIQUE_ID			55
-#define UNITTEST 					1
-
-#include "unittest.h"
 
 /* inline directive */
 #define _force_inline				inline
@@ -413,7 +415,7 @@ unittest_config(
 
 #define make_string(x) ({ \
 	char buf[128]; \
-	sprintf(buf, "key-%lld", (int64_t)(x)); \
+	sprintf(buf, "key-%" PRId64 "", (int64_t)(x)); \
 	buf; \
 })
 #define make_args(x)	make_string(x), strlen(make_string(x))
