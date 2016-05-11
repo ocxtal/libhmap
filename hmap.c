@@ -11,7 +11,6 @@
 #include <string.h>
 #include <stdint.h>
 #include "hmap.h"
-#include "kvec.h"
 #include "lmm.h"
 #include "log.h"
 #include "sassert.h"
@@ -179,8 +178,8 @@ struct hmap_s {
 	lmm_t *lmm;
 	uint32_t mask;
 	uint32_t object_size;
-	kvec_t(uint8_t) key_arr;
-	kvec_t(uint8_t) object_arr;
+	lmm_kvec_t(uint8_t) key_arr;
+	lmm_kvec_t(uint8_t) object_arr;
 	uint32_t next_id;
 	uint32_t reserved;
 	struct hmap_pair_s *table;
@@ -221,8 +220,8 @@ hmap_t *hmap_init(
 	hmap->object_size = _roundup(object_size, 16);
 	hmap->next_id = 0;
 	hmap->table = table;
-	kv_init(hmap->key_arr);
-	kv_init(hmap->object_arr);
+	lmm_kv_init(lmm, hmap->key_arr);
+	lmm_kv_init(lmm, hmap->object_arr);
 
 	/* init hashmap with invalid mark */
 	memset(hmap->table, 0xff, sizeof(struct hmap_pair_s) * hmap_size);
@@ -243,8 +242,8 @@ void hmap_clean(
 	struct hmap_s *hmap = (struct hmap_s *)_hmap;
 
 	if(hmap != NULL) {
-		kv_destroy(hmap->key_arr);
-		kv_destroy(hmap->object_arr);
+		lmm_kv_destroy(hmap->lmm, hmap->key_arr);
+		lmm_kv_destroy(hmap->lmm, hmap->object_arr);
 		lmm_free(hmap->lmm, hmap->table); hmap->table = NULL;
 		lmm_free(hmap->lmm, hmap); hmap = NULL;
 	}
@@ -259,7 +258,7 @@ struct hmap_header_intl_s *hmap_object_get_ptr(
 	struct hmap_s *hmap,
 	uint32_t id)
 {
-	return((struct hmap_header_intl_s *)(kv_ptr(hmap->object_arr) + (uint64_t)id * hmap->object_size));
+	return((struct hmap_header_intl_s *)(lmm_kv_ptr(hmap->object_arr) + (uint64_t)id * hmap->object_size));
 }
 
 /**
@@ -272,7 +271,7 @@ struct hmap_key_s hmap_object_get_key(
 {
 	struct hmap_header_intl_s *obj = hmap_object_get_ptr(hmap, id);
 	return((struct hmap_key_s){
-		.str = (char const *)kv_ptr(hmap->key_arr) + obj->key_base,
+		.str = (char const *)lmm_kv_ptr(hmap->key_arr) + obj->key_base,
 		.len = obj->key_len
 	});
 }
@@ -392,12 +391,12 @@ uint32_t hmap_get_id(
 
 		/* push key string to key_arr */
 		h->key_len = len;
-		h->key_base = kv_size(hmap->key_arr);
-		kv_pushm(hmap->key_arr, str, len);
-		kv_push(hmap->key_arr, '\0');
+		h->key_base = lmm_kv_size(hmap->key_arr);
+		lmm_kv_pushm(hmap->lmm, hmap->key_arr, str, len);
+		lmm_kv_push(hmap->lmm, hmap->key_arr, '\0');
 
 		/* add object to object array */
-		kv_pushm(hmap->object_arr, tmp, hmap->object_size);
+		lmm_kv_pushm(hmap->lmm, hmap->object_arr, tmp, hmap->object_size);
 	}
 	return(id);
 }
