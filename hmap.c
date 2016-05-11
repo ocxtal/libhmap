@@ -6,17 +6,19 @@
  */
 
 #define UNITTEST_UNIQUE_ID			55
-#define UNITTEST 					1
-
 #include "unittest.h"
 
 #include <string.h>
 #include <stdint.h>
 #include "hmap.h"
 #include "kvec.h"
+#include "lmm.h"
 #include "log.h"
 #include "sassert.h"
 
+
+/* constants */
+#define HMAP_DEFAULT_HASH_SIZE		( 128 )
 
 /* inline directive */
 #define _force_inline				inline
@@ -174,6 +176,7 @@ _static_assert(sizeof(struct hmap_pair_s) == 8);
  * @struct hmap_s
  */
 struct hmap_s {
+	lmm_t *lmm;
 	uint32_t mask;
 	uint32_t object_size;
 	kvec_t(uint8_t) key_arr;
@@ -187,22 +190,33 @@ struct hmap_s {
  * @fn hmap_init
  */
 hmap_t *hmap_init(
-	uint64_t hmap_size,
-	uint64_t object_size)
+	uint64_t object_size,
+	hmap_params_t const *params)
 {
+	struct hmap_params_s const default_params = {
+		.hmap_size = HMAP_DEFAULT_HASH_SIZE,
+		.lmm = NULL
+	};
+	params = (params == NULL) ? &default_params : params;
+
 	/* size must be power of 2 */
-	if(hmap_size == 0 || (hmap_size & (hmap_size - 1)) != 0) {
+	uint64_t hmap_size = (params->hmap_size == 0)
+		? HMAP_DEFAULT_HASH_SIZE
+		: params->hmap_size;
+	if((hmap_size & (hmap_size - 1)) != 0) {
 		return(NULL);
 	}
 
 	/* malloc mem */
-	struct hmap_s *hmap = malloc(sizeof(struct hmap_s));
-	struct hmap_pair_s *table = malloc(sizeof(struct hmap_pair_s) * hmap_size);
+	lmm_t *lmm = (lmm_t *)params->lmm;
+	struct hmap_s *hmap = lmm_malloc(lmm, sizeof(struct hmap_s));
+	struct hmap_pair_s *table = lmm_malloc(lmm, sizeof(struct hmap_pair_s) * hmap_size);
 	if(hmap == NULL || table == NULL) {
 		goto _hmap_init_error_handler;
 	}
 
 	/* init context */
+	hmap->lmm = lmm;
 	hmap->mask = (uint32_t)hmap_size - 1;
 	hmap->object_size = _roundup(object_size, 16);
 	hmap->next_id = 0;
@@ -215,8 +229,8 @@ hmap_t *hmap_init(
 	return((hmap_t *)hmap);
 
 _hmap_init_error_handler:;
-	free(hmap); hmap = NULL;
-	free(table); table = NULL;
+	lmm_free(lmm, hmap); hmap = NULL;
+	lmm_free(lmm, table); table = NULL;
 	return(NULL);
 }
 
@@ -231,8 +245,8 @@ void hmap_clean(
 	if(hmap != NULL) {
 		kv_destroy(hmap->key_arr);
 		kv_destroy(hmap->object_arr);
-		free(hmap->table); hmap->table = NULL;
-		free(hmap); hmap = NULL;
+		lmm_free(hmap->lmm, hmap->table); hmap->table = NULL;
+		lmm_free(hmap->lmm, hmap); hmap = NULL;
 	}
 	return;
 }
@@ -421,29 +435,53 @@ unittest_config(
 })
 #define make_args(x)	make_string(x), strlen(make_string(x))
 
-#define UNITTEST_HASH_SIZE			( 128 )
 #define UNITTEST_KEY_COUNT			( 32768 )
 
 /* create context */
 unittest()
 {
 	/* valid hash size */
-	hmap_t *hmap = hmap_init(UNITTEST_HASH_SIZE, sizeof(hmap_header_t));
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t), NULL);
+	assert(hmap != NULL, "%p", hmap);
+	hmap_clean(hmap);
+}
+
+/* with params */
+unittest()
+{
+	/* valid hash size */
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t),
+		HMAP_PARAMS(.hmap_size = 128));
 
 	assert(hmap != NULL, "%p", hmap);
 	hmap_clean(hmap);
 
 	/* invalid hash size */
-	hmap = hmap_init(127, 16);
-	
+	hmap = hmap_init(16, HMAP_PARAMS(.hmap_size = 0));
+	assert(hmap != NULL, "%p", hmap);
+	hmap_clean(hmap);
+
+	hmap = hmap_init(16, HMAP_PARAMS(.hmap_size = 127));
 	assert(hmap == NULL, "%p", hmap);
 	hmap_clean(hmap);
+}
+
+/* with lmm object */
+unittest()
+{
+	lmm_t *lmm = lmm_init(NULL, 1024);
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t),
+		HMAP_PARAMS(.lmm = lmm));
+
+	assert(hmap != NULL, "%p", hmap);
+	hmap_clean(hmap);
+	lmm_clean(lmm);
 }
 
 /* append and get */
 unittest()
 {
-	hmap_t *hmap = hmap_init(UNITTEST_HASH_SIZE, sizeof(hmap_header_t));
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t), NULL);
 
 	/* append key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
@@ -474,11 +512,48 @@ unittest()
 	hmap_clean(hmap);
 }
 
+/* with lmm object */
+unittest()
+{
+	lmm_t *lmm = lmm_init(NULL, 1024);
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t),
+		HMAP_PARAMS(.lmm = lmm));
+
+	/* append key */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+		
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
+	/* get key */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		struct hmap_key_s k = hmap_get_key(hmap, i);
+
+		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
+		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
+	/* get key in reverse order */
+	for(int64_t i = UNITTEST_KEY_COUNT - 1; i >= 0; i--) {
+		struct hmap_key_s k = hmap_get_key(hmap, i);
+
+		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
+		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
+	hmap_clean(hmap);
+	lmm_clean(lmm);
+}
+
 /* with different object size */
 unittest()
 {
 	/* 32 */
-	hmap_t *hmap = hmap_init(UNITTEST_HASH_SIZE, sizeof(hmap_header_t) + 32);
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t) + 32, NULL);
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		uint32_t id = hmap_get_id(hmap, make_args(i));
 		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
@@ -492,7 +567,7 @@ unittest()
 	hmap_clean(hmap);
 
 	/* 36 */
-	hmap = hmap_init(UNITTEST_HASH_SIZE, sizeof(hmap_header_t) + 36);
+	hmap = hmap_init(sizeof(hmap_header_t) + 36, NULL);
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		uint32_t id = hmap_get_id(hmap, make_args(i));
 		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
@@ -506,7 +581,7 @@ unittest()
 	hmap_clean(hmap);
 
 	/* 127 */
-	hmap = hmap_init(UNITTEST_HASH_SIZE, sizeof(hmap_header_t) + 127);
+	hmap = hmap_init(sizeof(hmap_header_t) + 127, NULL);
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		uint32_t id = hmap_get_id(hmap, make_args(i));
 		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
@@ -520,6 +595,29 @@ unittest()
 	hmap_clean(hmap);
 }
 
+/* with lmm */
+unittest()
+{
+	lmm_t *lmm = lmm_init(NULL, 1024 * 1024);
+
+	/* 127 */
+	hmap_t *hmap = hmap_init(sizeof(hmap_header_t) + 127,
+		HMAP_PARAMS(.lmm = lmm));
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		struct hmap_key_s k = hmap_get_key(hmap, i);
+		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
+		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+	}
+	hmap_clean(hmap);
+	lmm_clean(lmm);
+}
+
+
 /* get_object */
 unittest()
 {
@@ -527,8 +625,7 @@ unittest()
 		hmap_header_t header;
 		char s[128];
 	};
-	hmap_t *hmap = hmap_init(UNITTEST_HASH_SIZE,
-		sizeof(struct str_cont_s));
+	hmap_t *hmap = hmap_init(sizeof(struct str_cont_s), NULL);
 
 	/* append key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
@@ -558,6 +655,49 @@ unittest()
 
 	hmap_clean(hmap);
 }
+
+/* with lmm */
+unittest()
+{
+	lmm_t *lmm = lmm_init(NULL, 1024 * 1024);
+
+	struct str_cont_s {
+		hmap_header_t header;
+		char s[128];
+	};
+	hmap_t *hmap = hmap_init(sizeof(struct str_cont_s),
+		HMAP_PARAMS(.lmm = lmm));
+
+	/* append key */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+		struct str_cont_s *obj = hmap_get_object(hmap, id);
+
+		assert(obj != NULL, "obj(%p)", obj);
+
+		strcpy(obj->s, make_string(i));
+	}
+
+	/* get key */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		struct str_cont_s *obj = hmap_get_object(hmap, i);
+
+		assert(obj != NULL, "obj(%p)", obj);
+		assert(strcmp(obj->s, make_string(i)) == 0, "%s, %s", obj->s, make_string(i));
+	}
+
+	/* get key in reverse order */
+	for(int64_t i = UNITTEST_KEY_COUNT - 1; i >= 0; i--) {
+		struct str_cont_s *obj = hmap_get_object(hmap, i);
+
+		assert(obj != NULL, "obj(%p)", obj);
+		assert(strcmp(obj->s, make_string(i)) == 0, "%s, %s", obj->s, make_string(i));
+	}
+
+	hmap_clean(hmap);
+	lmm_clean(lmm);
+}
+
 
 /**
  * end of hmap.c

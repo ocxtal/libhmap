@@ -19,6 +19,16 @@ struct hmap_header_s {
 typedef struct hmap_header_s hmap_header_t;
 
 /**
+ * @struct hmap_params_s
+ */
+struct hmap_params_s {
+	uint64_t hmap_size;
+	void *lmm;
+};
+typedef struct hmap_params_s hmap_params_t;
+#define HMAP_PARAMS(...)		( &((struct hmap_params_s const){ __VA_ARGS__ }) )
+
+/**
  * @type hmap_t
  */
 typedef struct hmap_s hmap_t;
@@ -37,8 +47,8 @@ typedef struct hmap_key_s hmap_key_t;
  * @fn hmap_init
  */
 hmap_t *hmap_init(
-	uint64_t hmap_size,
-	uint64_t object_size);
+	uint64_t object_size,
+	hmap_params_t const *params);
 
 /**
  * @fn hmap_clean
