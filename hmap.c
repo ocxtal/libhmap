@@ -22,7 +22,8 @@
 #define _force_inline				inline
 
 /* roundup */
-#define _roundup(x, base)			( (((x) + (base) - 1) / (base)) * (base) )
+// #define _roundup(x, base)			( (((x) + (base) - 1) / (base)) * (base) )
+#define _roundup(x, base)			( ((x) + (base) - 1) & ~((base) - 1) )
 
 /* max, min */
 #define MAX2(x, y)					( (x) < (y) ? (y) : (x) )
