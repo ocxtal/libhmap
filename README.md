@@ -15,7 +15,9 @@ struct object {
 };
 
 /* create hashmap with initial size 128 */
-hmap_t *h = hmap_init(128, sizeof(struct object));
+hmap_t *h = hmap_init(
+	sizeof(struct object),
+	HMAP_PARAMS(.hmap_size = 128));
 
 /* reserve area for key0 */
 uint32_t id = hmap_get_id(h, "key0", strlen("key0"));
