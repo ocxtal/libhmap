@@ -299,7 +299,7 @@ void hmap_expand(
 	uint32_t mask = size - 1;
 
 	/* realloc */
-	hmap->table = (struct hmap_pair_s *)realloc(hmap->table,
+	hmap->table = (struct hmap_pair_s *)lmm_realloc(hmap->lmm, hmap->table,
 		sizeof(struct hmap_pair_s) * (uint64_t)size);
 
 	/* update context */
