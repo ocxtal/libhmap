@@ -199,7 +199,7 @@ hmap_t *hmap_init(
 	params = (params == NULL) ? &default_params : params;
 
 	/* size must be power of 2 */
-	uint64_t hmap_size = (params->hmap_size == 0)
+	uint64_t hmap_size = (params->hmap_size < 2)
 		? HMAP_DEFAULT_HASH_SIZE
 		: params->hmap_size;
 	if((hmap_size & (hmap_size - 1)) != 0) {
@@ -289,7 +289,7 @@ struct hmap_key_s hmap_object_get_key(
 {
 	struct hmap_header_intl_s *obj = hmap_object_get_ptr(hmap, id);
 	return((struct hmap_key_s){
-		.str = (char const *)lmm_kv_ptr(hmap->key_arr) + obj->key_base,
+		.ptr = (char const *)lmm_kv_ptr(hmap->key_arr) + obj->key_base,
 		.len = obj->key_len
 	});
 }
@@ -327,95 +327,137 @@ void hmap_expand(
 	memset(&hmap->table[prev_size], 0xff, sizeof(struct hmap_pair_s) * prev_size);
 
 	/* rehash */
+	#define _isvacant(id)	( ((id) & (uint32_t)-2) == (uint32_t)-2 )
 	for(int64_t i = 0; i < prev_size; i++) {
 		/* check id */
-		uint32_t const invalid_id = (uint32_t)-1;
-		uint32_t id = hmap->table[i].id;
-		if(id == invalid_id) { continue; }
+		if(_isvacant(hmap->table[i].id)) { continue; }
 
 		/* check if move is needed */
 		uint32_t base_hash_val = hmap->table[i].hash_val;
 		if((base_hash_val & mask) == i) { continue; }
 
 		/* move */
-		uint32_t hash_val = base_hash_val;
-		while(hmap->table[hmap->mask & hash_val].id != invalid_id) {
-			hash_val = hash_uint32(hash_val);
+		uint32_t pos = base_hash_val;
+		while(!_isvacant(hmap->table[mask & pos].id)) {
+			pos++;
 		}
-		hmap->table[i] = (struct hmap_pair_s){ (uint32_t)-1, (uint32_t)-1 };
-		hmap->table[hmap->mask & hash_val] = (struct hmap_pair_s){
-			.id = id,
-			.hash_val = base_hash_val
+		hmap->table[mask & pos] = hmap->table[i];
+		hmap->table[i] = (struct hmap_pair_s){
+			.id = (uint32_t)-1,			/* mark invalid */
+			.hash_val = (uint32_t)-1
 		};
-		debug("move id(%u) form %lld to %u", id, i, hmap->mask & hash_val);
+		// debug("move id(%u) form %lld to %u", hmap->table[mask & pos].id, i, mask & pos);
 	}
-	debug("expanded, mask(%u)", hmap->mask);
+	debug("expanded, mask(%u)", mask);
 	return;
+}
+
+/**
+ * @fn hmap_allocate_id
+ */
+static _force_inline
+uint32_t hmap_allocate_id(
+	struct hmap_s *hmap,
+	char const *str,
+	uint32_t len)
+{
+	debug("allocate new id(%u)", hmap->next_id);
+	/* reserve working area */
+	uint8_t tmp[hmap->object_size];
+	struct hmap_header_intl_s *h = (struct hmap_header_intl_s *)tmp;
+	h->key_len = len;
+	h->key_base = lmm_kv_size(hmap->key_arr);
+
+	/* push key string to key_arr */
+	lmm_kv_pushm(hmap->lmm, hmap->key_arr, str, len);
+	lmm_kv_push(hmap->lmm, hmap->key_arr, '\0');
+
+	/* add object to object array */
+	memset((void *)(h + 1), 0, hmap->object_size - sizeof(struct hmap_header_intl_s));
+	lmm_kv_pushm(hmap->lmm, hmap->object_arr, tmp, hmap->object_size);
+	return(hmap->next_id++);
 }
 
 /**
  * @fn hmap_get_id
  */
 uint32_t hmap_get_id(
-	hmap_t *_hmap,
+	struct hmap_s *hmap,
 	char const *str,
-	int32_t len)
+	uint32_t len)
 {
-	struct hmap_s *hmap = (struct hmap_s *)_hmap;
-
+	debug("entry, str(%s)", str);
 	uint32_t const invalid_id = (uint32_t)-1;
-	uint32_t id = invalid_id;
-	uint32_t tmp_id = invalid_id;
+	uint32_t const moved_id = (uint32_t)-2;
+	uint32_t mask = hmap->mask;
 
+	uint32_t const invalid_pos = (uint32_t)-1;
 	uint32_t base_hash_val = hash_string(str, len);
-	uint32_t hash_val = base_hash_val;
+	uint32_t pos = mask & base_hash_val, ins_pos = invalid_pos, found_pos = invalid_pos;
 
-	while((tmp_id = hmap->table[hmap->mask & hash_val].id) != invalid_id) {
-		struct hmap_key_s ex_key = hmap_object_get_key(hmap, tmp_id);
-		debug("ex_key at %u: str(%p), len(%d)", tmp_id, ex_key.str, ex_key.len);
+	struct hmap_pair_s p = { .id = invalid_id, .hash_val = base_hash_val }, t;
 
-		/* compare string */
-		if(ex_key.len == len && strncmp(ex_key.str, str, MIN2(ex_key.len, len) + 1) == 0) {
-			/* matched with existing string in the section array */
-			id = tmp_id; break;
+	/* iterate until the end of chain */
+	debug("pos(%u), id(%u)", pos, hmap->table[pos].id);
+	while((t = hmap->table[pos]).id != invalid_id) {
+		debug("check pos(%u), id(%u)", mask & pos, t.id);
+
+		if(t.id == moved_id || p.hash_val < t.hash_val) {
+			/* robinhood swapping */
+			debug("swap, id(%u), p(%u), u(%u)", t.id, p.hash_val, t.hash_val);
+			ins_pos = MIN2(ins_pos, pos);			/* keep the first swapped position */
+			hmap->table[pos] = p; p = t;
+		} else if(t.hash_val == base_hash_val) {
+			/* non-empty, non-swappable entry found, test if it is duplicate */
+			debug("check duplicate");
+			struct hmap_key_s ex_key = hmap_object_get_key(hmap, t.id);
+			if(ex_key.len == len && strncmp(ex_key.ptr, str, MIN2(ex_key.len, len) + 1) == 0) {
+				/* matched with existing string in the section array */
+				debug("duplicate found, pos(%u)", pos);
+				found_pos = pos;
+			}
 		}
-
-		debug("collision at %u, key(%s), ex_key(%s), hash_val(%x)",
-			hmap->mask & hash_val, str, ex_key.str, hash_uint32(hash_val));
-
-		/* not matched, rehash */
-		hash_val = hash_uint32(hash_val);
+		pos = mask & (pos + 1);
 	}
 
-	if(id == invalid_id) {
-		/* rehash if occupancy exceeds 0.5 */
-		if(hmap->next_id > (hmap->mask + 1) / 2) {
-			debug("check size next_id(%u), size(%u)",
-				hmap->next_id, (hmap->mask + 1) / 2);
-			hmap_expand(hmap);
-		}
+	debug("found_pos(%u), ins_pos(%u)", found_pos, ins_pos);
+	if(found_pos != invalid_pos && ins_pos == invalid_pos) {
+		return(hmap->table[found_pos].id);
+	}
 
-		/* add (hash_val, id) pair to table */
-		debug("id(%u), mask(%x), hash_val(%x), id(%u), base_hash_val(%x)",
-			hmap->mask & hash_val, hmap->mask, hash_val, hmap->next_id, base_hash_val);
-		hmap->table[hmap->mask & hash_val] = (struct hmap_pair_s){
-			.id = (id = hmap->next_id++),
+	/* get corresponding entry */
+	struct hmap_pair_s e = (found_pos != invalid_pos)
+		? hmap->table[found_pos]
+		: (struct hmap_pair_s){
+			.id = hmap_allocate_id(hmap, str, len),
 			.hash_val = base_hash_val
 		};
 
-		/* reserve working area */
-		uint8_t tmp[hmap->object_size];
-		// memset(tmp, 0, hmap->object_size);
-		struct hmap_header_intl_s *h = (struct hmap_header_intl_s *)tmp;
+	/* if e is taken from table, mark the vacancy moved */
+	if(found_pos != invalid_pos) {
+		hmap->table[found_pos] = (struct hmap_pair_s){
+			.id = moved_id,
+			.hash_val = (uint32_t)-1 };
+	}
 
-		/* push key string to key_arr */
-		h->key_len = len;
-		h->key_base = lmm_kv_size(hmap->key_arr);
-		lmm_kv_pushm(hmap->lmm, hmap->key_arr, str, len);
-		lmm_kv_push(hmap->lmm, hmap->key_arr, '\0');
+	/* update destination pos */
+	if(ins_pos == invalid_pos) {
+		ins_pos = pos;
+	}
 
-		/* add object to object array */
-		lmm_kv_pushm(hmap->lmm, hmap->object_arr, tmp, hmap->object_size);
+	/* update terminator */
+	if(p.id == moved_id) {
+		p = (struct hmap_pair_s){ .id = invalid_id, .hash_val = (uint32_t)-1 };
+	}
+	hmap->table[pos] = p;
+	hmap->table[ins_pos] = e;
+	uint32_t id = hmap->table[ins_pos].id;
+
+	/* rehash if occupancy exceeds 0.5 */
+	if(hmap->next_id > (mask + 1) / 2) {
+		debug("check size next_id(%u), size(%u)",
+			hmap->next_id, (mask + 1) / 2);
+		hmap_expand(hmap);
 	}
 	return(id);
 }
@@ -453,7 +495,7 @@ unittest_config(
 })
 #define make_args(x)	make_string(x), strlen(make_string(x))
 
-#define UNITTEST_KEY_COUNT			( 32768 )
+#define UNITTEST_KEY_COUNT			( 32768 * 32 )
 
 /* create context */
 unittest()
@@ -509,12 +551,20 @@ unittest()
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
+	/* get id */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
 	/* get key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
@@ -523,7 +573,7 @@ unittest()
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
@@ -554,12 +604,28 @@ unittest()
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
+	/* append again */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
+	/* get id */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
 	/* get key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
@@ -581,12 +647,20 @@ unittest()
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
+	/* get id */
+	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
+		uint32_t id = hmap_get_id(hmap, make_args(i));
+		
+		assert((int64_t)id == i, "i(%lld), id(%lld)", i, id);
+	}
+	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
+
 	/* get key */
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
@@ -595,7 +669,7 @@ unittest()
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	assert(hmap_get_count(hmap) == UNITTEST_KEY_COUNT, "count(%u)", hmap_get_count(hmap));
 
@@ -616,7 +690,7 @@ unittest()
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	hmap_clean(hmap);
 
@@ -630,7 +704,7 @@ unittest()
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	hmap_clean(hmap);
 
@@ -644,7 +718,7 @@ unittest()
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	hmap_clean(hmap);
 }
@@ -665,7 +739,7 @@ unittest()
 	for(int64_t i = 0; i < UNITTEST_KEY_COUNT; i++) {
 		struct hmap_key_s k = hmap_get_key(hmap, i);
 		assert(k.len == strlen(make_string(i)), "a(%d), b(%d)", k.len, strlen(make_string(i)));
-		assert(strcmp(k.str, make_string(i)) == 0, "a(%s), b(%s)", k.str, make_string(i));
+		assert(strcmp(k.ptr, make_string(i)) == 0, "a(%s), b(%s)", k.ptr, make_string(i));
 	}
 	hmap_clean(hmap);
 	lmm_clean(lmm);
